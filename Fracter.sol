@@ -1,132 +1,155 @@
-// SPDX-License-Identifier: MIT
-pragma solidity ^0.8.3;
+pragma solidity ^0.8.2;
 
 import "@openzeppelin/contracts/token/ERC1155/ERC1155.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC1155/extensions/ERC1155Supply.sol";
+import "@openzeppelin/contracts/utils/Counters.sol";
+import "@openzeppelin/contracts/token/ERC1155/extensions/IERC1155MetadataURI.sol";
 import "hardhat/console.sol";
-contract FractMarket is ERC1155, Ownable {
-    TokenFract[] supplies;
-    uint256[] minted;
-    //uint256[] rates;
-    uint256 globalTokenFractID;
-    event StringFailure(string stringFailure);
-    event BytesFailure(bytes bytesFailure);
-    //address private devaddress=0xc751A985DA804f97fa2Da87a12B0Ac7b5376fd1A;
-    constructor() ERC1155("https://api.mysite.com/tokens/{id}") {
-        globalTokenFractID = 0;
-    }
-     
-   
-    function getValue() public view returns (uint256) {
-        return globalTokenFractID;
+
+contract Fanvest is ERC1155, Ownable, ERC1155Supply {
+    using Counters for Counters.Counter;
+    uint256 public cutNumerator = 1;
+    uint256 public cutDenominator = 10000;
+    uint256 public supply = 0;
+    uint256 public minted = 0;
+    uint256 public rate = 0;
+    address public own;
+    address public thisContract;
+    address payable dev = payable(0xDdA99bD35363c268B41aC741D9B7e1a95BCF9BF1);
+    address[] fans;
+    //0xDdA99bD35363c268B41aC741D9B7e1a95BCF9BF1
+    Counters.Counter private _tokenIdCounter;
+
+    struct FilmToken {
+        string title;
+        string data;
     }
 
-    function getSupplies(uint256 _id) public view returns (TokenFract memory) {
-        return supplies[--_id];
+    bool private isMinting = false;
+    mapping(address => uint256) balances;
+    mapping(address => FilmToken) tokenMap;
+    FilmToken[] public tokenArray;
+
+    constructor(address _owner) ERC1155("") {
+        own = _owner;
+        thisContract = address(this);
     }
 
-    function getTokenMinters() public view returns (address[] memory) {
-        return tokenMinters;
+    modifier onlyDev() {
+        require(0xDdA99bD35363c268B41aC741D9B7e1a95BCF9BF1 == dev);
+        _;
+    }
+    modifier onlyOwn(address sender) {
+        require(own == sender);
+        _;
+    }
+
+    function updateCut(uint256 numerator, uint256 denominator) public onlyDev {
+        cutNumerator = numerator;
+        cutDenominator = denominator;
     }
 
     function setURI(string memory newuri) public {
         _setURI(newuri);
     }
 
-    struct TokenFract {
-        string name;
-        string data;
-        uint256 rate;
-        address creator;
-        uint256 TokenFractID;
-        uint256 totalSupply;
-    }
-    struct tokenBuyersData {
-        address buyer;
-        uint256 id;
-        uint256 amount;
-        uint256 price;
-    }
-    mapping(address => TokenFract) public resultMapping;
-    address[] public tokenMinters;
-    mapping(address => tokenBuyersData) public tokenBuyers;
-    tokenBuyersData[] public tokenBuyersDataArray;
-
     function mintSupply(
-        string memory _name,
-        string memory _data,
+        string calldata _title,
+        string calldata _data,
         uint256 _rate,
         uint256 _totalSupply
-    ) public  {
-        resultMapping[msg.sender] = TokenFract(
-            _name,
-            _data,
-            _rate,
-            msg.sender,
-            ++globalTokenFractID,
-            _totalSupply
-        );
-        //supplies.push(resultMapping[msg.sender]);
-        supplies.push(resultMapping[msg.sender]);
-        tokenMinters.push(msg.sender);
-        minted.push(0);
-        console.log('msg.sender:',msg.sender);
+    ) public payable onlyOwn(msg.sender) {
+        //uint256 cut = msg.value * cutNumerator / cutDenominator;
+        FilmToken memory _tempdata = FilmToken(_title, _data);
+        tokenArray.push(_tempdata);
+        // tokenMap[msg.sender].push(_tempdata);
+        supply = _totalSupply;
+        rate = _rate;
+        dev.transfer((cutNumerator / cutDenominator) * (10**18));
     }
 
-    function mint(uint256 _id, uint256 _amount) public payable {
-        uint256 index = _id - 1;
-        console.log(_amount,supplies[index].rate,(_amount * (supplies[index].rate*10**18)/1 ether),msg.value);
-        console.log((msg.value*(10**18)),supplies[index].creator);
-        require(msg.value >= 0.001 ether , "Not enough token to mint");//gave
-        require(_id <= supplies.length, "NO supply exists");
-        require(_id > 0, "NO token exists");
-
-        
+    function mint(uint256 id, uint256 amount) public payable {
         require(
-            minted[index] + _amount <= supplies[index].totalSupply,
-            "not enough supply"
-        );//gave
-        
-        require(
-            (msg.value/1 ether) >= (_amount * (supplies[index].rate*10**18)/1 ether),
-            "not enough token in ur wallet"
-        );//didnt give
-
-        _mint(msg.sender, _id, _amount, bytes("hello"));
-        console.log("minted!");
-        
-        //payable(owner()).transfer(0.001 ether);
-        bool sent = payable(supplies[index].creator).send(msg.value);
-        require(sent,"txn failed");
-        minted[index] += _amount;
-        tokenBuyers[msg.sender] = tokenBuyersData(
-            msg.sender,
-            _id,
-            _amount,
-            msg.value
+            amount <= (supply - minted) && amount > 0,
+            "Either amt entered is 0 which isnt allowed or the total supply has been minted or your amount is too large"
         );
-        tokenBuyersDataArray.push(tokenBuyers[msg.sender]);
+        require(msg.value >= rate, "There isnt enough money in your wallet");
+        console.log(string(tokenArray[0].data));
+        _mint(msg.sender, id, amount, bytes(tokenArray[0].data));
+        setURI(tokenArray[0].data);
+        minted += amount;
+        balances[msg.sender] += amount;
+        fans.push(msg.sender);
+        payable(own).transfer(rate);
     }
 
-    function withdraw() public payable onlyOwner {
-        require(address(this).balance > 0, "balance is 0");
-        payable(owner()).transfer(address(this).balance);
-    }
-    function _beforeTokenTransfer(address operator, address from, address to, uint256[] memory ids, uint256[] memory amounts, bytes memory data)
-        internal
-        override
-        onlyOwner
-    {
-        // for(uint256 i=0;i<ids.length;i++){
-        // require(minted[ids[i]]==supplies[ids[i]].totalSupply,"sale not over");
-        // }
-        //require(minted[ids[0]]==supplies[ids[0]].totalSupply,"sale not over");
+    // The following functions are overrides required by Solidity.
+
+    function _beforeTokenTransfer(
+        address operator,
+        address from,
+        address to,
+        uint256[] memory ids,
+        uint256[] memory amounts,
+        bytes memory data
+    ) internal override(ERC1155, ERC1155Supply) {
         super._beforeTokenTransfer(operator, from, to, ids, amounts, data);
     }
-    
-    // function mintBatch(address to, uint256[] memory ids, uint256[] memory amounts, bytes memory data)
-    //     public
-    // {
-    //     _mintBatch(to, ids, amounts, data);
-    // }
+
+    function safeTransferFrom(
+        address from,
+        address to,
+        uint256 id,
+        uint256 amount,
+        bytes memory data
+    ) public virtual override {
+        require(
+            from == _msgSender() || isApprovedForAll(from, _msgSender()),
+            "ERC1155: caller is not owner nor approved"
+        );
+        super._safeTransferFrom(from, to, id, amount, data);
+    }
+
+    function getSupply() public view returns (uint256) {
+        return supply;
+    }
+
+    function getMinted() public view returns (uint256) {
+        return minted;
+    }
+
+    function getFans() public view returns (address[] memory) {
+        return fans;
+    }
+
+    function getBalances() public view returns (uint256) {
+        return balances[msg.sender];
+    }
+}
+
+contract FanvestFactory {
+    mapping(address => Fanvest) public contracts;
+
+    function create() public {
+        Fanvest fanvest = new Fanvest(msg.sender);
+        contracts[msg.sender] = fanvest;
+    }
+
+    function getContract()
+        public
+        view
+        returns (
+            address own,
+            address thisContract,
+            uint256 balance
+        )
+    {
+        Fanvest fanvest = contracts[msg.sender];
+        return (
+            fanvest.own(),
+            fanvest.thisContract(),
+            address(fanvest).balance
+        );
+    }
 }
